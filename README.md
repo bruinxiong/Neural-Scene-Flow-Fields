@@ -3,7 +3,6 @@ PyTorch implementation of paper "Neural Scene Flow Fields for Space-Time View Sy
 
 [[Project Website]](https://www.cs.cornell.edu/~zl548/NSFF/) [[Paper]](https://arxiv.org/abs/2011.13084) [[Video]](https://www.youtube.com/watch?v=qsMIH7gYRCc&feature=emb_title)
 
-
 ## Dependency
 The code is tested with Python3, Pytorch >= 1.6 and CUDA >= 10.2, the dependencies includes 
 * configargparse
@@ -14,6 +13,7 @@ The code is tested with Python3, Pytorch >= 1.6 and CUDA >= 10.2, the dependenci
 * cupy
 * imageio.
 * tqdm
+* kornia
 
 ## Video preprocessing 
 1. Download nerf_data.zip from [link](https://drive.google.com/drive/folders/1G-NFZKEA8KSWojUKecpJPVoq5XCjBLOV?usp=sharing), an example input video with SfM camera poses and intrinsics estimated from [COLMAP](https://colmap.github.io/) (Note you need to use COLMAP "colmap image_undistorter" command to undistort input images to get "dense" folder as shown in the example, this dense folder should include "images" and "sparse" folders).
@@ -26,11 +26,12 @@ The code is tested with Python3, Pytorch >= 1.6 and CUDA >= 10.2, the dependenci
     cd nsff_scripts
     # create camera intrinsics/extrinsic format for NSFF, same as original NeRF where it uses imgs2poses.py script from the LLFF code: https://github.com/Fyusion/LLFF/blob/master/imgs2poses.py
     python save_poses_nerf.py --data_path "/home/xxx/Neural-Scene-Flow-Fields/kid-running/dense/"
-    # Resize input images and run single view model
-    python run_midas.py --data_path "/home/xxx/Neural-Scene-Flow-Fields/kid-running/dense/" --input_w 640 --input_h 360 --resize_height 288
-    # Run optical flow model (for easy setup and Pytorch version consistency, we use RAFT as backbond optical flow model, but should be easy to change to other models such as PWC-Net or FlowNet2.0)
+    # Resize input images and run single view model, 
+    # argument resize_height: resized image height for model training, width will be resized based on original aspect ratio
+    python run_midas.py --data_path "/home/xxx/Neural-Scene-Flow-Fields/kid-running/dense/" --resize_height 288
+    # Run optical flow model
     ./download_models.sh
-    python run_flows_video.py --model models/raft-things.pth --data_path /home/xxx/Neural-Scene-Flow-Fields/kid-running/dense/ --epi_threshold 1.0 --input_flow_w 768 --input_semantic_w 1024 --input_semantic_h 576
+    python run_flows_video.py --model models/raft-things.pth --data_path /home/xxx/Neural-Scene-Flow-Fields/kid-running/dense/ 
 ```
 
 ## Rendering from an example pretrained model
@@ -39,6 +40,7 @@ The code is tested with Python3, Pytorch >= 1.6 and CUDA >= 10.2, the dependenci
 Set datadir in config/config_kid-running.txt to the root directory of input video. Then go to directory "nsff_exp":
 ```bash
    cd nsff_exp
+   mkdir logs
 ```
 
 2. Rendering of fixed time, viewpoint interpolation
@@ -70,18 +72,18 @@ By running the example command, you should get the following result:
 ```bash
     python run_nerf.py --config configs/config_kid-running.txt
 ```
-The per-scene training takes ~2 days using 2 Nvidia V100 GPUs.
+The per-scene training takes ~2 days using 4 Nvidia GTX2080TI GPUs.
 
-2. Several parameters in config files you might need to know for training a good model
-* N_samples: in order to render images with higher resolution, you have to increase number sampled points
-* start_frame,  end_frame: indicate training frame range. The default model usually works for video of 1~2s. Training on longer frames can cause oversmooth rendering. To mitigate the effect, you can increase the capacity of the network by increasing netwidth (but it can drastically increase training time and memory usage).
-* decay_iteration: number of iteartion in initialization stage. Data-driven losses will decay every 1000*decay_iteration steps. It's usually good to match decay_iteration to the number of training frames. 
-* no_ndc: our current implementation only supports reconstruction in NDC space, meaning it only works for forward-facing scene like original NeRF. But it should be not hard to adapt to euclidean space.
+2. Several parameters in config files you might need to know for training a good model on in-the-wild video
+* final_height: this must be same as --resize_height argument in run_midas.py, in kid-running case, it should be 288.
+* N_samples: in order to render images with higher resolution, you have to increase number sampled points such as 256 or 512
+* chain_sf: model will perform local 5 frame consistency if set True, and perform 3 frame consistency if set False. For faster training, setting to False.
+* start_frame,  end_frame: indicate training frame range. The default model usually works for video of 1~2s and 30-60 frames work the best for default hyperparameters. Training on longer frames can cause oversmooth rendering. To mitigate the effect, you can increase the capacity of the network by increasing netwidth to 512.
+* decay_iteration: number of iteartion in initialization stage. Data-driven losses will decay every 1000 * decay_iteration steps. We have updated code to automatically calculate number of decay iterations.
+* no_ndc: our current implementation only supports reconstruction in NDC space, meaning it only works for forward-facing scene, same as original NeRF.
 * use_motion_mask, num_extra_sample: whether to use estimated coarse motion segmentation mask to perform hard-mining sampling during initialization stage, and how many extra samples during initialization stage.
-* w_depth, w_optical_flow: weight of losses for single-view depth and geometry consistency priors described in the paper. Weights of (0.4, 0.2) or (0.2, 0.1) usually work for most of the videos. 
-* w_cycle: weights of scene flow cycle consistency loss
-* w_sm: weight of scene flow smoothness loss
-* w_prob_reg: weight of disocculusion weight regularization
+* w_depth, w_optical_flow: weight of losses for single-view depth and geometry consistency priors described in the paper. Weights of (0.4, 0.2) or (0.2, 0.1) usually work the best for most of the videos. 
+* If you see signifacnt ghosting result in the final rendering, you might try the suggestion from [link](https://github.com/zhengqili/Neural-Scene-Flow-Fields/issues/18)
 
 ## Evaluation on the Dynamic Scene Dataset
 1. Download Dynamic Scene dataset "dynamic_scene_data_full.zip" from [link](https://drive.google.com/drive/folders/1G-NFZKEA8KSWojUKecpJPVoq5XCjBLOV?usp=sharing)
@@ -113,9 +115,9 @@ This repository is released under the [MIT license](hhttps://opensource.org/lice
 ## Citation
 If you find our code/models useful, please consider citing our paper:
 ```bash
-@article{li2020neural,
+@InProceedings{li2020neural,
   title={Neural Scene Flow Fields for Space-Time View Synthesis of Dynamic Scenes},
   author={Li, Zhengqi and Niklaus, Simon and Snavely, Noah and Wang, Oliver},
-  journal={arXiv preprint arXiv:2011.13084},
-  year={2020}
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  year={2021}
 }
